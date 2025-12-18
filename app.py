@@ -83,30 +83,6 @@ def get_thumbnail_base64(filepath, file_type):
     """Get thumbnail for video or image"""
     if file_type == 'image':
         return get_image_base64(filepath)
-    elif file_type == 'video':
-        # Create a video thumbnail placeholder
-        html = """
-        <div style="
-            width: 100%;
-            height: 100%;
-            border-radius: 50%;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border: 2px solid white;
-        ">
-            <div style="
-                width: 0;
-                height: 0;
-                border-left: 14px solid white;
-                border-top: 9px solid transparent;
-                border-bottom: 9px solid transparent;
-                margin-left: 4px;
-            "></div>
-        </div>
-        """
-        return base64.b64encode(html.encode()).decode()
     return None
 
 def validate_file(file):
@@ -349,7 +325,7 @@ def create_story_marker(item):
     filepath = item.get('filepath')
     file_type = item.get('type')
     
-    if filepath and os.path.exists(filepath) and file_type in ['image', 'video']:
+    if filepath and os.path.exists(filepath) and file_type == 'image':
         img_base64 = get_thumbnail_base64(filepath, file_type)
         if img_base64:
             gradient = "linear-gradient(135deg, #00C853 0%, #69F0AE 100%)" if file_type == 'image' else "linear-gradient(135deg, #FF6D00 0%, #FFAB40 100%)"
@@ -410,6 +386,7 @@ def create_story_marker(item):
             </div>
         </div>
         '''
+        return folium.DivIcon(html=html, icon_size=(60, 60), icon_anchor=(30, 30))
     else:
         html = f'''
         <div style="
@@ -430,8 +407,7 @@ def create_story_marker(item):
             </svg>
         </div>
         '''
-    
-    return folium.DivIcon(html=html, icon_size=(60, 60), icon_anchor=(30, 30))
+        return folium.DivIcon(html=html, icon_size=(60, 60), icon_anchor=(30, 30))
 
 def create_map():
     """Create the map"""
@@ -465,10 +441,30 @@ def create_map():
     for idx, item in enumerate(st.session_state.media_data):
         icon = create_story_marker(item)
         
+        # Create popup with click handler
+        popup_html = f'''
+        <div style="text-align: center; padding: 10px;">
+            <h4 style="margin: 0 0 10px 0; color: #333;">{item['title']}</h4>
+            <p style="margin: 0 0 10px 0; color: #666; font-size: 12px;">{item['description'][:80]}...</p>
+            <button onclick="window.parent.postMessage({{type: 'view_story', story_id: {item['id']}}}, '*')"
+                    style="background: linear-gradient(135deg, #FFFC00, #FF6B6B); 
+                           color: black; 
+                           border: none; 
+                           padding: 8px 16px; 
+                           border-radius: 20px; 
+                           cursor: pointer; 
+                           font-weight: bold;">
+                👁️ View Story
+            </button>
+        </div>
+        '''
+        
+        popup = folium.Popup(popup_html, max_width=250)
+        
         folium.Marker(
             location=[item['lat'], item['lon']],
             icon=icon,
-            popup=folium.Popup(f"<b>{item['title']}</b><br>{item['description'][:100]}...", max_width=250),
+            popup=popup,
             tooltip=f"👆 Click to view: {item['title']}"
         ).add_to(m)
     
@@ -622,45 +618,56 @@ if st.session_state.show_upload_form:
     </div>
     """, unsafe_allow_html=True)
 
-# JavaScript to handle marker clicks
+# JavaScript to handle marker clicks from popups
 js_code = '''
 <script>
+    // Listen for messages from iframe (popup buttons)
     window.addEventListener('message', function(event) {
-        if (event.data.type === 'marker_clicked') {
-            localStorage.setItem('clicked_story_id', event.data.story_id);
-            window.location.reload();
-        }
-    });
-    
-    window.onload = function() {
-        const storyId = localStorage.getItem('clicked_story_id');
-        if (storyId) {
-            localStorage.removeItem('clicked_story_id');
+        if (event.data.type === 'view_story') {
+            // Store the story ID in a hidden element that Streamlit can access
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.id = 'selected_story_id';
+            input.value = event.data.story_id;
+            document.body.appendChild(input);
+            
+            // Trigger a Streamlit rerun
             window.parent.postMessage({
-                type: 'load_story',
-                story_id: parseInt(storyId)
+                type: 'streamlit:setComponentValue',
+                value: event.data.story_id
             }, '*');
         }
-    };
+    });
 </script>
 '''
 
 # Inject JavaScript
 st.components.v1.html(js_code, height=0)
 
-# Check for story to view
-if st.session_state.viewing_story is None:
-    query_params = st.query_params
-    if 'story_id' in query_params:
-        try:
-            story_id = int(query_params['story_id'])
-            for idx, story in enumerate(st.session_state.media_data):
-                if story['id'] == story_id:
-                    st.session_state.viewing_story = story_id
-                    st.session_state.current_story_index = idx
-                    break
-        except:
-            pass
+# Check if a story was selected via JavaScript
+# We'll use a text input to capture the story ID from JavaScript
+story_id_input = st.text_input("Story ID", key="story_id_input", label_visibility="collapsed")
+
+if story_id_input and story_id_input.isdigit():
+    story_id = int(story_id_input)
+    for idx, story in enumerate(st.session_state.media_data):
+        if story['id'] == story_id:
+            st.session_state.viewing_story = story_id
+            st.session_state.current_story_index = idx
+            st.rerun()
+
+# Alternative: Use query parameters for popup clicks
+query_params = st.query_params
+if 'story_id' in query_params and st.session_state.viewing_story is None:
+    try:
+        story_id = int(query_params['story_id'])
+        for idx, story in enumerate(st.session_state.media_data):
+            if story['id'] == story_id:
+                st.session_state.viewing_story = story_id
+                st.session_state.current_story_index = idx
+                break
+    except:
+        pass
 
 # STORY VIEWER
 if st.session_state.viewing_story is not None:
@@ -708,28 +715,33 @@ if st.session_state.viewing_story is not None:
                 try:
                     image = Image.open(current_story['filepath'])
                     st.image(image, use_container_width=True)
-                except:
+                except Exception as e:
+                    st.error(f"Error loading image: {e}")
                     st.markdown(f"""
                     <div style="width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; color: white;">
                         <div style="font-size: 64px; margin-bottom: 20px;">📷</div>
                         <div style="font-size: 24px; margin-bottom: 10px;">Image</div>
+                        <div style="font-size: 16px; opacity: 0.8; text-align: center; padding: 0 20px;">{current_story['description'][:100]}</div>
                     </div>
                     """, unsafe_allow_html=True)
             else:
                 # Display video
                 try:
-                    with open(current_story['filepath'], 'rb') as f:
-                        video_bytes = f.read()
+                    video_file = open(current_story['filepath'], 'rb')
+                    video_bytes = video_file.read()
                     st.video(video_bytes)
-                except:
+                    video_file.close()
+                except Exception as e:
+                    st.error(f"Error loading video: {e}")
                     st.markdown(f"""
                     <div style="width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; color: white;">
                         <div style="font-size: 64px; margin-bottom: 20px;">🎬</div>
                         <div style="font-size: 24px; margin-bottom: 10px;">Video</div>
+                        <div style="font-size: 16px; opacity: 0.8; text-align: center; padding: 0 20px;">{current_story['description'][:100]}</div>
                     </div>
                     """, unsafe_allow_html=True)
         else:
-            # Placeholder
+            # Placeholder for sample data or missing files
             icon = '🎬' if current_story['type'] == 'video' else '📷'
             st.markdown(f"""
             <div style="width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; color: white;">
@@ -796,6 +808,13 @@ else:
         # Create map
         m = create_map()
         map_output = st_folium(m, width=None, height=600, key="main_map")
+        
+        # Check if a marker was clicked in the map output
+        if map_output and 'last_object_clicked_popup' in map_output:
+            if map_output['last_object_clicked_popup']:
+                # Try to extract story ID from popup
+                # This is a fallback method
+                pass
         
         # Quick view stories
         st.markdown("### 📱 Quick View")
