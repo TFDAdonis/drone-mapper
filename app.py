@@ -163,6 +163,9 @@ if 'clicked_marker_id' not in st.session_state:
 if 'show_upload_form' not in st.session_state:
     st.session_state.show_upload_form = False
 
+if 'upload_success' not in st.session_state:
+    st.session_state.upload_success = None
+
 # Custom CSS
 st.markdown("""
 <style>
@@ -327,6 +330,17 @@ st.markdown("""
         border: none !important;
         font-weight: 800 !important;
     }
+    
+    /* Success message */
+    .success-message {
+        background: linear-gradient(135deg, #00C853, #69F0AE);
+        color: white;
+        padding: 20px;
+        border-radius: 15px;
+        text-align: center;
+        margin: 20px 0;
+        animation: fadeIn 0.5s ease;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -461,51 +475,6 @@ def create_map():
     folium.LayerControl(position='topright').add_to(m)
     return m
 
-def handle_file_upload():
-    """Handle file upload and add to media data"""
-    if 'uploaded_file' in st.session_state and st.session_state.uploaded_file is not None:
-        file = st.session_state.uploaded_file
-        is_valid, result = validate_file(file)
-        
-        if not is_valid:
-            st.error(result)
-            return
-        
-        file_type = result
-        
-        # Save the file
-        filepath = save_uploaded_file(file)
-        
-        # Generate a new ID
-        if st.session_state.media_data:
-            new_id = max(item['id'] for item in st.session_state.media_data) + 1
-        else:
-            new_id = 1
-        
-        # Create new media entry
-        new_media = {
-            'id': new_id,
-            'type': file_type,
-            'title': st.session_state.upload_title,
-            'lat': float(st.session_state.upload_lat),
-            'lon': float(st.session_state.upload_lon),
-            'timestamp': st.session_state.upload_timestamp.strftime('%Y-%m-%d %H:%M:%S'),
-            'altitude': float(st.session_state.upload_altitude),
-            'description': st.session_state.upload_description,
-            'filepath': filepath
-        }
-        
-        # Add to media data
-        st.session_state.media_data.append(new_media)
-        save_media_data(st.session_state.media_data)
-        
-        # Clear form
-        st.session_state.uploaded_file = None
-        st.session_state.show_upload_form = False
-        
-        st.success(f"✅ {file_type.title()} uploaded successfully!")
-        st.rerun()
-
 # Header
 st.markdown("""
 <div style="text-align: center; margin-bottom: 30px;">
@@ -526,17 +495,31 @@ with col2:
         st.session_state.show_upload_form = not st.session_state.show_upload_form
         st.rerun()
 
+# Show success message if upload was successful
+if st.session_state.upload_success:
+    st.markdown(f"""
+    <div class="success-message">
+        <div style="font-size: 24px; margin-bottom: 10px;">✅ {st.session_state.upload_success}</div>
+        <div style="font-size: 14px;">Your media has been added to the map!</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Clear success message after 5 seconds
+    if st.button("OK", key="clear_success"):
+        st.session_state.upload_success = None
+        st.rerun()
+
 # Upload Form
 if st.session_state.show_upload_form:
     st.markdown('<div class="upload-form">', unsafe_allow_html=True)
     
     st.markdown("### 📤 Upload Drone Media")
     
-    # File upload
+    # File upload - using a different approach without session state conflicts
     uploaded_file = st.file_uploader(
         "Choose a file",
         type=ALLOWED_IMAGE_TYPES + ALLOWED_VIDEO_TYPES,
-        key="uploaded_file",
+        key="file_uploader",
         help="Upload images or videos from your drone"
     )
     
@@ -565,30 +548,65 @@ if st.session_state.show_upload_form:
     col1, col2 = st.columns(2)
     
     with col1:
-        title = st.text_input("Title *", key="upload_title", placeholder="Enter a descriptive title")
+        title = st.text_input("Title *", value="", placeholder="Enter a descriptive title")
         
         st.markdown('<div class="coordinate-inputs">', unsafe_allow_html=True)
-        lat = st.number_input("Latitude *", key="upload_lat", 
-                             value=34.0522, format="%.6f", step=0.0001)
-        lon = st.number_input("Longitude *", key="upload_lon", 
-                             value=-118.2437, format="%.6f", step=0.0001)
+        lat = st.number_input("Latitude *", value=34.0522, format="%.6f", step=0.0001)
+        lon = st.number_input("Longitude *", value=-118.2437, format="%.6f", step=0.0001)
         st.markdown('</div>', unsafe_allow_html=True)
     
     with col2:
-        description = st.text_area("Description *", key="upload_description", 
-                                  placeholder="Describe your drone footage...", height=100)
+        description = st.text_area("Description *", value="", placeholder="Describe your drone footage...", height=100)
         
-        timestamp = st.date_input("Date", key="upload_timestamp", value=datetime.now())
+        timestamp = st.date_input("Date", value=datetime.now())
         
-        altitude = st.number_input("Altitude (meters) *", key="upload_altitude", 
-                                  min_value=0.0, value=100.0, step=10.0)
+        altitude = st.number_input("Altitude (meters) *", min_value=0.0, value=100.0, step=10.0)
     
     # Submit button
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if st.button("🚀 Upload to Map", key="submit_upload", use_container_width=True, type="primary"):
             if uploaded_file and title and description:
-                handle_file_upload()
+                # Validate file
+                is_valid, result = validate_file(uploaded_file)
+                
+                if not is_valid:
+                    st.error(result)
+                else:
+                    file_type = result
+                    
+                    # Save the file
+                    filepath = save_uploaded_file(uploaded_file)
+                    
+                    # Generate a new ID
+                    if st.session_state.media_data:
+                        new_id = max(item['id'] for item in st.session_state.media_data) + 1
+                    else:
+                        new_id = 1
+                    
+                    # Create new media entry
+                    new_media = {
+                        'id': new_id,
+                        'type': file_type,
+                        'title': title,
+                        'lat': float(lat),
+                        'lon': float(lon),
+                        'timestamp': timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+                        'altitude': float(altitude),
+                        'description': description,
+                        'filepath': filepath
+                    }
+                    
+                    # Add to media data
+                    st.session_state.media_data.append(new_media)
+                    save_media_data(st.session_state.media_data)
+                    
+                    # Set success message
+                    st.session_state.upload_success = f"{file_type.title()} uploaded successfully!"
+                    st.session_state.show_upload_form = False
+                    
+                    # Rerun to show success message
+                    st.rerun()
             else:
                 st.error("Please fill all required fields (*)")
     
