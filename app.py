@@ -8,6 +8,7 @@ import base64
 import os
 import json
 import uuid
+import mimetypes
 
 # Page configuration
 st.set_page_config(
@@ -23,6 +24,10 @@ DATA_FILE = "media_data.json"
 
 # Ensure upload directory exists
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# Allowed file types
+ALLOWED_IMAGE_TYPES = ["jpg", "jpeg", "png", "gif", "bmp", "webp"]
+ALLOWED_VIDEO_TYPES = ["mp4", "mov", "avi", "mkv", "webm", "m4v"]
 
 def load_media_data():
     """Load media data from JSON file"""
@@ -50,6 +55,15 @@ def save_uploaded_file(uploaded_file):
     
     return filepath
 
+def get_file_type(filename):
+    """Determine if file is image or video based on extension"""
+    ext = filename.split('.')[-1].lower()
+    if ext in ALLOWED_IMAGE_TYPES:
+        return 'image'
+    elif ext in ALLOWED_VIDEO_TYPES:
+        return 'video'
+    return None
+
 def get_image_base64(filepath):
     """Convert image to base64 for embedding in HTML"""
     try:
@@ -64,6 +78,51 @@ def get_image_base64(filepath):
     except Exception as e:
         print(f"Error converting image: {e}")
     return None
+
+def get_thumbnail_base64(filepath, file_type):
+    """Get thumbnail for video or image"""
+    if file_type == 'image':
+        return get_image_base64(filepath)
+    elif file_type == 'video':
+        # Create a video thumbnail placeholder
+        html = """
+        <div style="
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid white;
+        ">
+            <div style="
+                width: 0;
+                height: 0;
+                border-left: 14px solid white;
+                border-top: 9px solid transparent;
+                border-bottom: 9px solid transparent;
+                margin-left: 4px;
+            "></div>
+        </div>
+        """
+        return base64.b64encode(html.encode()).decode()
+    return None
+
+def validate_file(file):
+    """Validate uploaded file"""
+    filename = file.name
+    file_type = get_file_type(filename)
+    
+    if file_type is None:
+        return False, "File type not supported. Please upload images or videos only."
+    
+    # Check file size (limit to 200MB)
+    max_size = 200 * 1024 * 1024  # 200MB
+    if file.size > max_size:
+        return False, f"File too large. Maximum size is 200MB. Your file is {file.size/(1024*1024):.1f}MB."
+    
+    return True, file_type
 
 def get_sample_data():
     """Return sample drone media data"""
@@ -101,9 +160,56 @@ if 'current_story_index' not in st.session_state:
 if 'clicked_marker_id' not in st.session_state:
     st.session_state.clicked_marker_id = None
 
+if 'show_upload_form' not in st.session_state:
+    st.session_state.show_upload_form = False
+
 # Custom CSS
 st.markdown("""
 <style>
+    /* Upload Form Styles */
+    .upload-form {
+        background: white;
+        border-radius: 20px;
+        padding: 25px;
+        margin: 20px 0;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        border: 2px solid #FFFC00;
+        animation: slideIn 0.3s ease;
+    }
+    
+    @keyframes slideIn {
+        from { transform: translateY(-10px); opacity: 0; }
+        to { transform: translateY(0); opacity: 1; }
+    }
+    
+    .upload-preview {
+        border: 2px dashed #ddd;
+        border-radius: 15px;
+        padding: 20px;
+        text-align: center;
+        margin: 15px 0;
+        background: #f8f9fa;
+        min-height: 150px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    .file-info {
+        background: #e3f2fd;
+        border-radius: 10px;
+        padding: 12px;
+        margin: 10px 0;
+        border-left: 4px solid #2196F3;
+    }
+    
+    .coordinate-inputs {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 15px;
+        margin: 15px 0;
+    }
+    
     /* Story Viewer Overlay */
     .story-overlay {
         position: fixed;
@@ -213,23 +319,33 @@ st.markdown("""
         border-radius: 20px !important;
         font-weight: 600 !important;
     }
+    
+    /* Upload button highlight */
+    .upload-btn {
+        background: linear-gradient(135deg, #FFFC00, #FF6B6B) !important;
+        color: #000 !important;
+        border: none !important;
+        font-weight: 800 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 def create_story_marker(item):
     """Create Snapchat-style story marker"""
     filepath = item.get('filepath')
-    has_image = filepath and os.path.exists(filepath) and item['type'] == 'image'
+    file_type = item.get('type')
     
-    if has_image:
-        img_base64 = get_image_base64(filepath)
+    if filepath and os.path.exists(filepath) and file_type in ['image', 'video']:
+        img_base64 = get_thumbnail_base64(filepath, file_type)
         if img_base64:
+            gradient = "linear-gradient(135deg, #00C853 0%, #69F0AE 100%)" if file_type == 'image' else "linear-gradient(135deg, #FF6D00 0%, #FFAB40 100%)"
+            
             html = f'''
             <div style="
                 width: 60px;
                 height: 60px;
                 border-radius: 50%;
-                background: linear-gradient(135deg, #FFFC00 0%, #FF6B6B 50%, #4ECDC4 100%);
+                background: {gradient};
                 padding: 3px;
                 box-shadow: 0 4px 15px rgba(0,0,0,0.3);
                 cursor: pointer;
@@ -301,18 +417,6 @@ def create_story_marker(item):
         </div>
         '''
     
-    # Add JavaScript to handle click and store in session state
-    html += f'''
-    <script>
-        document.currentScript.parentElement.onclick = function() {{
-            window.parent.postMessage({{
-                type: 'marker_clicked',
-                story_id: {item['id']}
-            }}, '*');
-        }};
-    </script>
-    '''
-    
     return folium.DivIcon(html=html, icon_size=(60, 60), icon_anchor=(30, 30))
 
 def create_map():
@@ -350,11 +454,57 @@ def create_map():
         folium.Marker(
             location=[item['lat'], item['lon']],
             icon=icon,
+            popup=folium.Popup(f"<b>{item['title']}</b><br>{item['description'][:100]}...", max_width=250),
             tooltip=f"👆 Click to view: {item['title']}"
         ).add_to(m)
     
     folium.LayerControl(position='topright').add_to(m)
     return m
+
+def handle_file_upload():
+    """Handle file upload and add to media data"""
+    if 'uploaded_file' in st.session_state and st.session_state.uploaded_file is not None:
+        file = st.session_state.uploaded_file
+        is_valid, result = validate_file(file)
+        
+        if not is_valid:
+            st.error(result)
+            return
+        
+        file_type = result
+        
+        # Save the file
+        filepath = save_uploaded_file(file)
+        
+        # Generate a new ID
+        if st.session_state.media_data:
+            new_id = max(item['id'] for item in st.session_state.media_data) + 1
+        else:
+            new_id = 1
+        
+        # Create new media entry
+        new_media = {
+            'id': new_id,
+            'type': file_type,
+            'title': st.session_state.upload_title,
+            'lat': float(st.session_state.upload_lat),
+            'lon': float(st.session_state.upload_lon),
+            'timestamp': st.session_state.upload_timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+            'altitude': float(st.session_state.upload_altitude),
+            'description': st.session_state.upload_description,
+            'filepath': filepath
+        }
+        
+        # Add to media data
+        st.session_state.media_data.append(new_media)
+        save_media_data(st.session_state.media_data)
+        
+        # Clear form
+        st.session_state.uploaded_file = None
+        st.session_state.show_upload_form = False
+        
+        st.success(f"✅ {file_type.title()} uploaded successfully!")
+        st.rerun()
 
 # Header
 st.markdown("""
@@ -369,23 +519,105 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# Upload Button
+col1, col2, col3 = st.columns([3, 1, 3])
+with col2:
+    if st.button("📤 Upload Media", key="toggle_upload", use_container_width=True, type="primary"):
+        st.session_state.show_upload_form = not st.session_state.show_upload_form
+        st.rerun()
+
+# Upload Form
+if st.session_state.show_upload_form:
+    st.markdown('<div class="upload-form">', unsafe_allow_html=True)
+    
+    st.markdown("### 📤 Upload Drone Media")
+    
+    # File upload
+    uploaded_file = st.file_uploader(
+        "Choose a file",
+        type=ALLOWED_IMAGE_TYPES + ALLOWED_VIDEO_TYPES,
+        key="uploaded_file",
+        help="Upload images or videos from your drone"
+    )
+    
+    if uploaded_file:
+        # File info
+        file_size_mb = uploaded_file.size / (1024 * 1024)
+        file_type = get_file_type(uploaded_file.name)
+        
+        st.markdown(f"""
+        <div class="file-info">
+            <strong>📄 File:</strong> {uploaded_file.name}<br>
+            <strong>📁 Type:</strong> {file_type.upper()}<br>
+            <strong>📏 Size:</strong> {file_size_mb:.2f} MB
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Preview for images
+        if file_type == 'image':
+            try:
+                image = Image.open(uploaded_file)
+                st.image(image, caption="Preview", use_container_width=True)
+            except:
+                st.warning("Could not preview image")
+    
+    # Form inputs
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        title = st.text_input("Title *", key="upload_title", placeholder="Enter a descriptive title")
+        
+        st.markdown('<div class="coordinate-inputs">', unsafe_allow_html=True)
+        lat = st.number_input("Latitude *", key="upload_lat", 
+                             value=34.0522, format="%.6f", step=0.0001)
+        lon = st.number_input("Longitude *", key="upload_lon", 
+                             value=-118.2437, format="%.6f", step=0.0001)
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col2:
+        description = st.text_area("Description *", key="upload_description", 
+                                  placeholder="Describe your drone footage...", height=100)
+        
+        timestamp = st.date_input("Date", key="upload_timestamp", value=datetime.now())
+        
+        altitude = st.number_input("Altitude (meters) *", key="upload_altitude", 
+                                  min_value=0.0, value=100.0, step=10.0)
+    
+    # Submit button
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🚀 Upload to Map", key="submit_upload", use_container_width=True, type="primary"):
+            if uploaded_file and title and description:
+                handle_file_upload()
+            else:
+                st.error("Please fill all required fields (*)")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Supported formats info
+    st.markdown("""
+    <div style="background: #f1f8e9; padding: 15px; border-radius: 10px; margin-top: 20px;">
+        <strong>📋 Supported Formats:</strong><br>
+        <span style="color: #00C853;">📷 Images:</span> JPG, JPEG, PNG, GIF, BMP, WEBP<br>
+        <span style="color: #FF6D00;">🎬 Videos:</span> MP4, MOV, AVI, MKV, WEBM, M4V<br>
+        <span style="font-size: 12px; color: #666;">Max file size: 200MB per file</span>
+    </div>
+    """, unsafe_allow_html=True)
+
 # JavaScript to handle marker clicks
 js_code = '''
 <script>
     window.addEventListener('message', function(event) {
         if (event.data.type === 'marker_clicked') {
-            // Store in localStorage and trigger Streamlit rerun
             localStorage.setItem('clicked_story_id', event.data.story_id);
             window.location.reload();
         }
     });
     
-    // Check for stored click on page load
     window.onload = function() {
         const storyId = localStorage.getItem('clicked_story_id');
         if (storyId) {
             localStorage.removeItem('clicked_story_id');
-            // Send to Streamlit
             window.parent.postMessage({
                 type: 'load_story',
                 story_id: parseInt(storyId)
@@ -400,7 +632,6 @@ st.components.v1.html(js_code, height=0)
 
 # Check for story to view
 if st.session_state.viewing_story is None:
-    # Check if a marker was clicked
     query_params = st.query_params
     if 'story_id' in query_params:
         try:
@@ -644,6 +875,6 @@ if st.session_state.media_data:
 # Footer
 st.markdown("""
 <div style="text-align: center; color: #999; font-size: 12px; padding: 20px 0; margin-top: 30px;">
-    👻 Drone Media Map • Click on map markers or story buttons to view!
+    👻 Drone Media Map • Upload your drone photos and videos to create interactive stories!
 </div>
 """, unsafe_allow_html=True)
