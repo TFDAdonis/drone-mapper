@@ -8,11 +8,10 @@ import base64
 import os
 import json
 import uuid
-import mimetypes
 
 # Page configuration
 st.set_page_config(
-    page_title="Drone Media Mapping",
+    page_title="Drone Media Map",
     page_icon="🛸",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -87,7 +86,6 @@ def validate_file(file):
     if file_type is None:
         return False, "File type not supported. Please upload images or videos only."
     
-    # Check file size (limit to 200MB)
     max_size = 200 * 1024 * 1024  # 200MB
     if file.size > max_size:
         return False, f"File too large. Maximum size is 200MB. Your file is {file.size/(1024*1024):.1f}MB."
@@ -127,13 +125,31 @@ if 'show_upload_form' not in st.session_state:
 if 'upload_success' not in st.session_state:
     st.session_state.upload_success = None
 
-if 'clicked_marker' not in st.session_state:
-    st.session_state.clicked_marker = None
+if 'map_click' not in st.session_state:
+    st.session_state.map_click = None
+
+if 'selected_stories' not in st.session_state:
+    st.session_state.selected_stories = []
 
 # Custom CSS
 st.markdown("""
 <style>
-    /* Upload Form Styles */
+    .story-card {
+        background: white;
+        border-radius: 15px;
+        padding: 15px;
+        margin-bottom: 15px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        border: 2px solid transparent;
+        transition: all 0.3s ease;
+        cursor: pointer;
+    }
+    
+    .story-card:hover {
+        border-color: #FFFC00;
+        transform: translateY(-2px);
+    }
+    
     .upload-form {
         background: white;
         border-radius: 20px;
@@ -141,31 +157,18 @@ st.markdown("""
         margin: 20px 0;
         box-shadow: 0 10px 30px rgba(0,0,0,0.1);
         border: 2px solid #FFFC00;
-        animation: slideIn 0.3s ease;
     }
     
-    @keyframes slideIn {
-        from { transform: translateY(-10px); opacity: 0; }
-        to { transform: translateY(0); opacity: 1; }
-    }
-    
-    .file-info {
-        background: #e3f2fd;
-        border-radius: 10px;
-        padding: 12px;
+    .click-marker {
+        background: linear-gradient(135deg, #FFFC00, #FF6B6B);
+        color: black;
+        padding: 10px 20px;
+        border-radius: 15px;
+        font-weight: bold;
         margin: 10px 0;
-        border-left: 4px solid #2196F3;
     }
     
-    .coordinate-inputs {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 15px;
-        margin: 15px 0;
-    }
-    
-    /* Story Viewer Overlay */
-    .story-overlay {
+    .story-viewer-overlay {
         position: fixed;
         top: 0;
         left: 0;
@@ -176,87 +179,15 @@ st.markdown("""
         display: flex;
         align-items: center;
         justify-content: center;
-        animation: fadeIn 0.3s ease;
     }
     
-    @keyframes fadeIn {
-        from { opacity: 0; }
-        to { opacity: 1; }
-    }
-    
-    .story-viewer {
-        width: 90%;
-        max-width: 800px;
+    .story-viewer-content {
         background: #000;
         border-radius: 20px;
         overflow: hidden;
+        width: 90%;
+        max-width: 800px;
         box-shadow: 0 20px 60px rgba(0,0,0,0.5);
-        animation: slideUp 0.3s ease;
-    }
-    
-    @keyframes slideUp {
-        from { transform: translateY(20px); opacity: 0; }
-        to { transform: translateY(0); opacity: 1; }
-    }
-    
-    .story-header {
-        padding: 20px;
-        background: rgba(0,0,0,0.9);
-        display: flex;
-        align-items: center;
-        gap: 15px;
-        border-bottom: 1px solid rgba(255,255,255,0.1);
-    }
-    
-    .story-media-container {
-        width: 100%;
-        height: 500px;
-        background: #000;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        overflow: hidden;
-    }
-    
-    .story-footer {
-        padding: 20px;
-        background: rgba(0,0,0,0.9);
-        border-top: 1px solid rgba(255,255,255,0.1);
-    }
-    
-    /* Marker styling */
-    .marker-container {
-        cursor: pointer;
-        transition: transform 0.3s ease;
-    }
-    
-    .marker-container:hover {
-        transform: scale(1.1);
-    }
-    
-    /* Remove Streamlit default styling */
-    .stButton > button {
-        border-radius: 20px !important;
-        font-weight: 600 !important;
-    }
-    
-    /* Upload button highlight */
-    .upload-btn {
-        background: linear-gradient(135deg, #FFFC00, #FF6B6B) !important;
-        color: #000 !important;
-        border: none !important;
-        font-weight: 800 !important;
-    }
-    
-    /* Success message */
-    .success-message {
-        background: linear-gradient(135deg, #00C853, #69F0AE);
-        color: white;
-        padding: 20px;
-        border-radius: 15px;
-        text-align: center;
-        margin: 20px 0;
-        animation: fadeIn 0.5s ease;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -270,7 +201,7 @@ def create_story_marker(item):
         img_base64 = get_image_base64(filepath)
         if img_base64:
             html = f'''
-            <div class="marker-container" style="
+            <div style="
                 width: 60px;
                 height: 60px;
                 border-radius: 50%;
@@ -294,7 +225,7 @@ def create_story_marker(item):
     # Default markers
     if item['type'] == 'video':
         html = f'''
-        <div class="marker-container" style="
+        <div style="
             width: 56px;
             height: 56px;
             border-radius: 50%;
@@ -326,7 +257,7 @@ def create_story_marker(item):
         return folium.DivIcon(html=html, icon_size=(60, 60), icon_anchor=(30, 30))
     else:
         html = f'''
-        <div class="marker-container" style="
+        <div style="
             width: 52px;
             height: 52px;
             border-radius: 50%;
@@ -346,7 +277,7 @@ def create_story_marker(item):
         return folium.DivIcon(html=html, icon_size=(60, 60), icon_anchor=(30, 30))
 
 def create_map():
-    """Create the map"""
+    """Create the map with all markers"""
     if st.session_state.media_data:
         center_lat = sum(item['lat'] for item in st.session_state.media_data) / len(st.session_state.media_data)
         center_lon = sum(item['lon'] for item in st.session_state.media_data) / len(st.session_state.media_data)
@@ -360,6 +291,7 @@ def create_map():
         control_scale=False
     )
     
+    # Add tile layers
     folium.TileLayer(
         tiles='https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
         attr='OpenStreetMap & CARTO',
@@ -374,200 +306,164 @@ def create_map():
         max_zoom=19
     ).add_to(m)
     
-    for idx, item in enumerate(st.session_state.media_data):
+    # Add all story markers
+    for item in st.session_state.media_data:
         icon = create_story_marker(item)
-        
-        # Create a simple popup with just the title
-        popup = folium.Popup(f"<b>{item['title']}</b><br><i>Click outside then use buttons below</i>", max_width=200)
         
         folium.Marker(
             location=[item['lat'], item['lon']],
             icon=icon,
-            popup=popup,
-            tooltip=f"👆 Click for info: {item['title']}"
+            tooltip=f"📌 {item['title']}",
+            popup=folium.Popup(f"<b>{item['title']}</b><br>{item['type'].upper()} • {item['altitude']}m", max_width=200)
+        ).add_to(m)
+    
+    # Add a marker for the user's click if exists
+    if st.session_state.map_click:
+        folium.Marker(
+            location=[st.session_state.map_click['lat'], st.session_state.map_click['lng']],
+            icon=folium.Icon(color='red', icon='info-sign'),
+            popup="You clicked here!"
         ).add_to(m)
     
     folium.LayerControl(position='topright').add_to(m)
     return m
 
-# Header
-st.markdown("""
-<div style="text-align: center; margin-bottom: 30px;">
-    <h1 style="font-size: 36px; font-weight: 800; color: #000; margin-bottom: 10px;">
-        👻 Drone Media Map
-        <span style="background: #FFFC00; color: #000; padding: 6px 16px; border-radius: 20px; font-size: 16px; font-weight: 700;">
-            SNAP STYLE
-        </span>
-    </h1>
-    <p style="color: #666;">Click on any map marker, then use the buttons below to view stories</p>
-</div>
-""", unsafe_allow_html=True)
+# Main App
+st.title("📡 Drone Media Map")
+st.markdown("Click anywhere on the map to find nearby drone stories!")
 
-# Main layout - ALWAYS show map and controls
-col1, col2 = st.columns([5, 1])
+# Create two columns for the layout
+col1, col2 = st.columns([3, 1])
 
 with col1:
-    # Create and display map
+    # Create and display the map
     m = create_map()
     map_data = st_folium(m, width=None, height=600, key="main_map")
     
-    # Store clicked marker location
-    if map_data and 'last_object_clicked' in map_data and map_data['last_object_clicked']:
-        clicked_lat = map_data['last_object_clicked']['lat']
-        clicked_lon = map_data['last_object_clicked']['lng']
-        
-        # Find the closest story to the clicked location
-        min_distance = float('inf')
-        closest_story = None
-        closest_idx = 0
-        
-        for idx, story in enumerate(st.session_state.media_data):
-            distance = ((story['lat'] - clicked_lat) ** 2 + (story['lon'] - clicked_lon) ** 2) ** 0.5
-            if distance < min_distance:
-                min_distance = distance
-                closest_story = story
-                closest_idx = idx
-        
-        if closest_story and min_distance < 0.01:  # Within ~1km
-            st.session_state.clicked_marker = closest_story['id']
-            st.session_state.current_story_index = closest_idx
-    
-    # Show stories near clicked location
-    if st.session_state.clicked_marker:
-        story_id = st.session_state.clicked_marker
-        for idx, story in enumerate(st.session_state.media_data):
-            if story['id'] == story_id:
-                st.markdown(f"""
-                <div style="background: linear-gradient(135deg, #FFFC00, #FF6B6B); padding: 15px; border-radius: 15px; margin: 15px 0;">
-                    <div style="color: black; font-weight: bold; font-size: 18px;">📍 {story['title']}</div>
-                    <div style="color: rgba(0,0,0,0.8); font-size: 14px;">{story['description'][:100]}...</div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
-                with col_btn2:
-                    if st.button("👁️ View This Story", key=f"view_clicked_{story_id}", use_container_width=True):
-                        st.session_state.viewing_story = story_id
-                        st.session_state.current_story_index = idx
-                        st.rerun()
-                break
+    # Check if user clicked on the map
+    if map_data and 'last_clicked' in map_data and map_data['last_clicked']:
+        st.session_state.map_click = map_data['last_clicked']
+        st.rerun()
 
 with col2:
-    st.markdown("### 📍 Legend")
-    st.markdown("""
-    <div style="padding: 8px 0;">
-        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
-            <div style="width: 14px; height: 14px; border-radius: 50%; background: linear-gradient(135deg, #00C853 0%, #69F0AE 100%); border: 2px solid white;"></div>
-            <span style="font-size: 13px;">Photo</span>
-        </div>
-        <div style="display: flex; align-items: center; gap: 10px;">
-            <div style="width: 14px; height: 14px; border-radius: 50%; background: linear-gradient(135deg, #FF6D00 0%, #FFAB40 100%); border: 2px solid white;"></div>
-            <span style="font-size: 13px;">Video</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown("---")
     st.markdown("### 📊 Stats")
     total = len(st.session_state.media_data)
     images = sum(1 for x in st.session_state.media_data if x['type'] == 'image')
     videos = sum(1 for x in st.session_state.media_data if x['type'] == 'video')
-    st.metric("Total", total)
+    st.metric("Total Stories", total)
     st.metric("Photos", images)
     st.metric("Videos", videos)
+    
+    st.markdown("---")
+    st.markdown("### 📍 Legend")
+    st.markdown("""
+    <div style="margin: 10px 0;">
+        <div style="display: flex; align-items: center; gap: 10px; margin: 5px 0;">
+            <div style="width: 12px; height: 12px; border-radius: 50%; background: linear-gradient(135deg, #00C853 0%, #69F0AE 100%);"></div>
+            <span>Photo Story</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px; margin: 5px 0;">
+            <div style="width: 12px; height: 12px; border-radius: 50%; background: linear-gradient(135deg, #FF6D00 0%, #FFAB40 100%);"></div>
+            <span>Video Story</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px; margin: 5px 0;">
+            <div style="width: 12px; height: 12px; border-radius: 50%; background: red;"></div>
+            <span>Your Click</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-# Upload Button
-st.markdown("---")
-col1, col2, col3 = st.columns([3, 1, 3])
-with col2:
-    if st.button("📤 Upload Media", key="toggle_upload", use_container_width=True, type="primary"):
-        st.session_state.show_upload_form = not st.session_state.show_upload_form
-        st.rerun()
-
-# Show success message if upload was successful
-if st.session_state.upload_success:
+# Show clicked location and nearby stories
+if st.session_state.map_click:
+    st.markdown("---")
     st.markdown(f"""
-    <div class="success-message">
-        <div style="font-size: 24px; margin-bottom: 10px;">✅ {st.session_state.upload_success}</div>
-        <div style="font-size: 14px;">Your media has been added to the map!</div>
+    <div class="click-marker">
+        📍 You clicked at: {st.session_state.map_click['lat']:.4f}, {st.session_state.map_click['lng']:.4f}
     </div>
     """, unsafe_allow_html=True)
     
-    # Clear success message
-    if st.button("OK", key="clear_success"):
-        st.session_state.upload_success = None
-        st.rerun()
+    # Find stories near the clicked location
+    clicked_lat = st.session_state.map_click['lat']
+    clicked_lon = st.session_state.map_click['lng']
+    
+    nearby_stories = []
+    for idx, story in enumerate(st.session_state.media_data):
+        distance = ((story['lat'] - clicked_lat) ** 2 + (story['lon'] - clicked_lon) ** 2) ** 0.5
+        if distance < 0.1:  # Within ~11km
+            nearby_stories.append((idx, story, distance))
+    
+    if nearby_stories:
+        st.subheader(f"📱 Nearby Stories ({len(nearby_stories)} found)")
+        
+        # Sort by distance
+        nearby_stories.sort(key=lambda x: x[2])
+        
+        cols = st.columns(2)
+        for i, (idx, story, distance) in enumerate(nearby_stories):
+            with cols[i % 2]:
+                st.markdown(f"""
+                <div class="story-card">
+                    <div style="font-weight: bold; font-size: 16px;">{story['title']}</div>
+                    <div style="font-size: 12px; color: #666; margin: 5px 0;">
+                        📍 {distance*111:.1f}km away • {story['type'].upper()} • {story['altitude']}m
+                    </div>
+                    <div style="font-size: 14px; margin: 10px 0;">{story['description'][:100]}...</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                if st.button(f"👁️ View This Story", key=f"view_nearby_{story['id']}", use_container_width=True):
+                    st.session_state.viewing_story = story['id']
+                    st.session_state.current_story_index = idx
+                    st.rerun()
+    else:
+        st.info("No stories found near your click. Try clicking closer to a marker!")
 
-# Upload Form
+# Upload Section
+st.markdown("---")
+st.markdown("## 📤 Upload Your Drone Media")
+
+if st.button("➕ Upload New Media", key="toggle_upload", use_container_width=True):
+    st.session_state.show_upload_form = not st.session_state.show_upload_form
+    st.rerun()
+
 if st.session_state.show_upload_form:
-    st.markdown('<div class="upload-form">', unsafe_allow_html=True)
-    
-    st.markdown("### 📤 Upload Drone Media")
-    
-    # File upload
-    uploaded_file = st.file_uploader(
-        "Choose a file",
-        type=ALLOWED_IMAGE_TYPES + ALLOWED_VIDEO_TYPES,
-        key="file_uploader",
-        help="Upload images or videos from your drone"
-    )
-    
-    if uploaded_file:
-        # File info
-        file_size_mb = uploaded_file.size / (1024 * 1024)
-        file_type = get_file_type(uploaded_file.name)
+    with st.form("upload_form"):
+        st.markdown("### Upload Details")
         
-        st.markdown(f"""
-        <div class="file-info">
-            <strong>📄 File:</strong> {uploaded_file.name}<br>
-            <strong>📁 Type:</strong> {file_type.upper()}<br>
-            <strong>📏 Size:</strong> {file_size_mb:.2f} MB
-        </div>
-        """, unsafe_allow_html=True)
+        col1, col2 = st.columns(2)
         
-        # Preview for images
-        if file_type == 'image':
-            try:
-                image = Image.open(uploaded_file)
-                st.image(image, caption="Preview", use_container_width=True)
-            except:
-                st.warning("Could not preview image")
-    
-    # Form inputs
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        title = st.text_input("Title *", value="", placeholder="Enter a descriptive title")
+        with col1:
+            uploaded_file = st.file_uploader(
+                "Choose drone media file",
+                type=ALLOWED_IMAGE_TYPES + ALLOWED_VIDEO_TYPES,
+                help="Upload photos or videos from your drone"
+            )
+            
+            title = st.text_input("Title *", placeholder="Enter a descriptive title")
+            
+            st.markdown("**Location**")
+            lat = st.number_input("Latitude *", value=34.0522, format="%.6f", step=0.0001)
+            lon = st.number_input("Longitude *", value=-118.2437, format="%.6f", step=0.0001)
         
-        st.markdown('<div class="coordinate-inputs">', unsafe_allow_html=True)
-        lat = st.number_input("Latitude *", value=34.0522, format="%.6f", step=0.0001)
-        lon = st.number_input("Longitude *", value=-118.2437, format="%.6f", step=0.0001)
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    with col2:
-        description = st.text_area("Description *", value="", placeholder="Describe your drone footage...", height=100)
+        with col2:
+            description = st.text_area("Description *", placeholder="Describe your drone footage...", height=100)
+            
+            timestamp = st.date_input("Date", value=datetime.now())
+            
+            altitude = st.number_input("Altitude (meters) *", min_value=0.0, value=100.0, step=10.0)
         
-        timestamp = st.date_input("Date", value=datetime.now())
-        
-        altitude = st.number_input("Altitude (meters) *", min_value=0.0, value=100.0, step=10.0)
-    
-    # Submit button
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        if st.button("🚀 Upload to Map", key="submit_upload", use_container_width=True, type="primary"):
+        # Submit button
+        if st.form_submit_button("🚀 Upload to Map", use_container_width=True):
             if uploaded_file and title and description:
-                # Validate file
                 is_valid, result = validate_file(uploaded_file)
                 
                 if not is_valid:
                     st.error(result)
                 else:
                     file_type = result
-                    
-                    # Save the file
                     filepath = save_uploaded_file(uploaded_file)
                     
-                    # Generate a new ID
+                    # Generate new ID
                     if st.session_state.media_data:
                         new_id = max(item['id'] for item in st.session_state.media_data) + 1
                     else:
@@ -590,70 +486,14 @@ if st.session_state.show_upload_form:
                     st.session_state.media_data.append(new_media)
                     save_media_data(st.session_state.media_data)
                     
-                    # Set success message
-                    st.session_state.upload_success = f"{file_type.title()} uploaded successfully!"
+                    st.success(f"✅ {file_type.title()} uploaded successfully!")
                     st.session_state.show_upload_form = False
-                    
-                    # Rerun to show success message
+                    st.session_state.upload_success = True
                     st.rerun()
             else:
                 st.error("Please fill all required fields (*)")
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Supported formats info
-    st.markdown("""
-    <div style="background: #f1f8e9; padding: 15px; border-radius: 10px; margin-top: 20px;">
-        <strong>📋 Supported Formats:</strong><br>
-        <span style="color: #00C853;">📷 Images:</span> JPG, JPEG, PNG, GIF, BMP, WEBP<br>
-        <span style="color: #FF6D00;">🎬 Videos:</span> MP4, MOV, AVI, MKV, WEBM, M4V<br>
-        <span style="font-size: 12px; color: #666;">Max file size: 200MB per file</span>
-    </div>
-    """, unsafe_allow_html=True)
 
-# Quick View Stories Section
-st.markdown("---")
-st.markdown("### 📱 Quick View Stories")
-cols = st.columns(3)
-for idx, story in enumerate(st.session_state.media_data[:6]):
-    with cols[idx % 3]:
-        # Story card
-        if st.button(f"👁️ {story['title'][:15]}...", 
-                   key=f"quick_view_{story['id']}",
-                   use_container_width=True):
-            st.session_state.viewing_story = story['id']
-            st.session_state.current_story_index = idx
-            st.rerun()
-        
-        # Show thumbnail if available
-        if story.get('filepath') and os.path.exists(story['filepath']) and story['type'] == 'image':
-            try:
-                with Image.open(story['filepath']) as img:
-                    img.thumbnail((200, 150))
-                    st.image(img, use_container_width=True)
-            except:
-                pass
-        
-        # Story info
-        st.markdown(f"""
-        <div style="background: #f8f9fa; padding: 10px; border-radius: 10px; margin-top: 5px;">
-            <div style="font-weight: 600; font-size: 14px; color: #333;">{story['title']}</div>
-            <div style="font-size: 11px; color: #666; margin: 3px 0;">{story['timestamp'][:10]} • {story['altitude']}m</div>
-            <div style="margin-top: 5px;">
-                <span style="
-                    display: inline-block;
-                    padding: 2px 8px;
-                    border-radius: 10px;
-                    font-size: 10px;
-                    font-weight: 600;
-                    background: {'#00C853' if story['type'] == 'image' else '#FF6D00'};
-                    color: white;
-                ">{story['type'].upper()}</span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-# All Stories Section
+# All Stories Grid View
 st.markdown("---")
 st.markdown("## 📱 All Stories")
 
@@ -662,24 +502,16 @@ if st.session_state.media_data:
     
     for idx, story in enumerate(st.session_state.media_data):
         with cols[idx % 3]:
-            # Story card
-            if st.button(f"👁️ View {story['title'][:20]}...", 
-                        key=f"view_{story['id']}",
-                        use_container_width=True,
-                        help=f"Click to view this story"):
-                st.session_state.viewing_story = story['id']
-                st.session_state.current_story_index = idx
-                st.rerun()
-            
-            # Story info
+            # Story preview card
             st.markdown(f"""
-            <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; margin-top: 5px;">
-                <div style="font-weight: 600; font-size: 16px; color: #333;">{story['title']}</div>
-                <div style="font-size: 12px; color: #666; margin: 5px 0;">{story['timestamp'][:10]} • {story['altitude']}m</div>
-                <div style="font-size: 14px; color: #555;">{story['description'][:80]}...</div>
-                <div style="margin-top: 10px;">
+            <div class="story-card" onclick="this.nextElementSibling.click()">
+                <div style="font-weight: bold; font-size: 16px; color: #333;">{story['title']}</div>
+                <div style="font-size: 12px; color: #666; margin: 5px 0;">
+                    📅 {story['timestamp'][:10]} • 📍 {story['lat']:.2f}, {story['lon']:.2f}
+                </div>
+                <div style="font-size: 14px; color: #555; margin: 10px 0;">{story['description'][:80]}...</div>
+                <div style="display: flex; gap: 5px; margin-top: 10px;">
                     <span style="
-                        display: inline-block;
                         padding: 3px 10px;
                         border-radius: 10px;
                         font-size: 11px;
@@ -688,169 +520,141 @@ if st.session_state.media_data:
                         color: white;
                     ">{story['type'].upper()}</span>
                     <span style="
-                        display: inline-block;
                         padding: 3px 10px;
                         border-radius: 10px;
                         font-size: 11px;
                         background: #2962FF;
                         color: white;
-                        margin-left: 5px;
-                    ">📍 {story['lat']:.2f}, {story['lon']:.2f}</span>
+                    ">⬆️ {story['altitude']}m</span>
                 </div>
             </div>
             """, unsafe_allow_html=True)
+            
+            # Hidden button that gets clicked
+            if st.button(f"View {story['title']}", key=f"view_{story['id']}", label_visibility="collapsed"):
+                st.session_state.viewing_story = story['id']
+                st.session_state.current_story_index = idx
+                st.rerun()
 
-# STORY VIEWER (as a modal/overlay)
+# STORY VIEWER MODAL
 if st.session_state.viewing_story is not None:
     current_story = st.session_state.media_data[st.session_state.current_story_index]
     
-    # Create overlay using columns and container
-    st.markdown("""
-    <div style="
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: rgba(0,0,0,0.95);
-        z-index: 9999;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    ">
-    """, unsafe_allow_html=True)
+    # Create overlay
+    st.markdown('<div class="story-viewer-overlay">', unsafe_allow_html=True)
     
-    # Create the viewer container
     with st.container():
-        col1, col2, col3 = st.columns([1, 8, 1])
-        with col2:
-            # Story viewer content
+        # Main viewer content
+        st.markdown('<div class="story-viewer-content">', unsafe_allow_html=True)
+        
+        # Header
+        col_header1, col_header2, col_header3 = st.columns([1, 8, 1])
+        with col_header2:
             st.markdown(f"""
-            <div style="
-                background: #000;
-                border-radius: 20px;
-                overflow: hidden;
-                box-shadow: 0 20px 60px rgba(0,0,0,0.5);
-            ">
+            <div style="padding: 20px; background: rgba(0,0,0,0.9); display: flex; align-items: center; gap: 15px;">
                 <div style="
-                    padding: 20px;
-                    background: rgba(0,0,0,0.9);
+                    width: 50px;
+                    height: 50px;
+                    border-radius: 50%;
+                    background: linear-gradient(45deg, #FFFC00, #FF6B6B);
                     display: flex;
                     align-items: center;
-                    gap: 15px;
-                    border-bottom: 1px solid rgba(255,255,255,0.1);
+                    justify-content: center;
+                    font-size: 24px;
+                    color: white;
                 ">
-                    <div style="
-                        width: 50px;
-                        height: 50px;
-                        border-radius: 50%;
-                        background: linear-gradient(45deg, #FFFC00, #FF6B6B);
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        font-size: 24px;
-                        color: white;
-                    ">
-                        {'🎬' if current_story['type'] == 'video' else '📷'}
-                    </div>
-                    <div>
-                        <div style="color: white; font-weight: 600; font-size: 22px;">{current_story['title']}</div>
-                        <div style="color: rgba(255,255,255,0.7); font-size: 14px;">
-                            {current_story['timestamp'][:10]} • {current_story['altitude']}m
-                        </div>
+                    {'🎬' if current_story['type'] == 'video' else '📷'}
+                </div>
+                <div>
+                    <div style="color: white; font-weight: 600; font-size: 22px;">{current_story['title']}</div>
+                    <div style="color: rgba(255,255,255,0.7); font-size: 14px;">
+                        📅 {current_story['timestamp']} • 📍 {current_story['lat']:.4f}, {current_story['lon']:.4f}
                     </div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
-            
-            # Media content
-            if current_story.get('filepath') and os.path.exists(current_story['filepath']):
-                if current_story['type'] == 'image':
-                    try:
-                        image = Image.open(current_story['filepath'])
-                        st.image(image, use_container_width=True)
-                    except:
-                        st.markdown(f"""
-                        <div style="width: 100%; height: 400px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: white; background: #000;">
-                            <div style="font-size: 64px; margin-bottom: 20px;">📷</div>
-                            <div style="font-size: 24px; margin-bottom: 10px;">Image</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                else:
-                    try:
-                        video_file = open(current_story['filepath'], 'rb')
-                        video_bytes = video_file.read()
-                        st.video(video_bytes)
-                        video_file.close()
-                    except:
-                        st.markdown(f"""
-                        <div style="width: 100%; height: 400px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: white; background: #000;">
-                            <div style="font-size: 64px; margin-bottom: 20px;">🎬</div>
-                            <div style="font-size: 24px; margin-bottom: 10px;">Video</div>
-                        </div>
-                        """, unsafe_allow_html=True)
+        
+        # Media content
+        if current_story.get('filepath') and os.path.exists(current_story['filepath']):
+            if current_story['type'] == 'image':
+                try:
+                    image = Image.open(current_story['filepath'])
+                    st.image(image, use_container_width=True)
+                except:
+                    st.markdown(f"""
+                    <div style="height: 400px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: white; background: #000;">
+                        <div style="font-size: 64px; margin-bottom: 20px;">📷</div>
+                        <div style="font-size: 24px;">Image Preview</div>
+                    </div>
+                    """, unsafe_allow_html=True)
             else:
-                icon = '🎬' if current_story['type'] == 'video' else '📷'
-                st.markdown(f"""
-                <div style="width: 100%; height: 400px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: white; background: #000;">
-                    <div style="font-size: 64px; margin-bottom: 20px;">{icon}</div>
-                    <div style="font-size: 24px; margin-bottom: 10px;">{current_story['type'].title()}</div>
-                    <div style="font-size: 16px; opacity: 0.8; text-align: center; padding: 0 20px;">{current_story['description'][:100]}</div>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            # Story footer
+                try:
+                    with open(current_story['filepath'], 'rb') as f:
+                        video_bytes = f.read()
+                    st.video(video_bytes)
+                except:
+                    st.markdown(f"""
+                    <div style="height: 400px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: white; background: #000;">
+                        <div style="font-size: 64px; margin-bottom: 20px;">🎬</div>
+                        <div style="font-size: 24px;">Video Preview</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+        else:
+            icon = '🎬' if current_story['type'] == 'video' else '📷'
             st.markdown(f"""
-            <div style="
-                padding: 20px;
-                background: rgba(0,0,0,0.9);
-                border-top: 1px solid rgba(255,255,255,0.1);
-            ">
-                <div style="color: white; font-size: 16px; margin-bottom: 15px; line-height: 1.6;">
-                    {current_story['description']}
-                </div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; color: rgba(255,255,255,0.7); font-size: 14px;">
-                    <div>
-                        <div style="font-weight: 600; margin-bottom: 5px; color: #FFFC00;">📍 Location</div>
-                        <div style="font-family: monospace; font-size: 13px;">{current_story['lat']:.6f}, {current_story['lon']:.6f}</div>
-                    </div>
-                    <div>
-                        <div style="font-weight: 600; margin-bottom: 5px; color: #FFFC00;">🕒 Time</div>
-                        <div>{current_story['timestamp'][11:]}</div>
-                    </div>
-                    <div>
-                        <div style="font-weight: 600; margin-bottom: 5px; color: #FFFC00;">⬆️ Altitude</div>
-                        <div>{current_story['altitude']} meters</div>
-                    </div>
-                </div>
+            <div style="height: 400px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: white; background: #000;">
+                <div style="font-size: 64px; margin-bottom: 20px;">{icon}</div>
+                <div style="font-size: 24px; margin-bottom: 10px;">{current_story['type'].title()} Story</div>
+                <div style="font-size: 16px; opacity: 0.8; text-align: center; padding: 0 20px;">{current_story['description']}</div>
             </div>
             """, unsafe_allow_html=True)
+        
+        # Footer with description and metadata
+        st.markdown(f"""
+        <div style="padding: 20px; background: rgba(0,0,0,0.9);">
+            <div style="color: white; font-size: 16px; margin-bottom: 15px; line-height: 1.6;">
+                {current_story['description']}
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; color: rgba(255,255,255,0.7); font-size: 14px;">
+                <div>
+                    <div style="font-weight: 600; margin-bottom: 5px; color: #FFFC00;">📍 Location Coordinates</div>
+                    <div style="font-family: monospace; font-size: 13px;">Lat: {current_story['lat']:.6f}<br>Lon: {current_story['lon']:.6f}</div>
+                </div>
+                <div>
+                    <div style="font-weight: 600; margin-bottom: 5px; color: #FFFC00;">📊 Flight Details</div>
+                    <div>Altitude: {current_story['altitude']}m<br>Type: {current_story['type'].upper()}</div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown('</div>', unsafe_allow_html=True)  # Close story-viewer-content
     
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)  # Close overlay
     
-    # Navigation buttons (outside the overlay container so they're clickable)
+    # Navigation buttons (outside the overlay so they're clickable)
     col_nav1, col_nav2, col_nav3 = st.columns(3)
     with col_nav1:
-        if st.button("← Previous", key="prev_story_overlay"):
+        if st.button("← Previous Story", key="prev_story", use_container_width=True):
             prev_index = (st.session_state.current_story_index - 1) % len(st.session_state.media_data)
             st.session_state.current_story_index = prev_index
             st.rerun()
     
     with col_nav2:
-        if st.button("✕ Close Viewer", key="close_story_overlay", type="primary"):
+        if st.button("✕ Close Viewer", key="close_story", type="primary", use_container_width=True):
             st.session_state.viewing_story = None
-            st.session_state.clicked_marker = None
             st.rerun()
     
     with col_nav3:
-        if st.button("Next →", key="next_story_overlay"):
+        if st.button("Next Story →", key="next_story", use_container_width=True):
             next_index = (st.session_state.current_story_index + 1) % len(st.session_state.media_data)
             st.session_state.current_story_index = next_index
             st.rerun()
 
 # Footer
+st.markdown("---")
 st.markdown("""
-<div style="text-align: center; color: #999; font-size: 12px; padding: 20px 0; margin-top: 30px;">
-    👻 Drone Media Map • Click on map markers, then use the buttons below to view stories!
+<div style="text-align: center; color: #666; font-size: 12px; padding: 20px 0;">
+    🚁 Drone Media Map • Click on the map to find stories or upload your own drone footage!
 </div>
 """, unsafe_allow_html=True)
