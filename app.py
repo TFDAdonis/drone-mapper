@@ -9,6 +9,7 @@ import os
 import json
 import uuid
 import mimetypes
+from urllib.parse import urlencode
 
 # Page configuration
 st.set_page_config(
@@ -79,12 +80,6 @@ def get_image_base64(filepath):
         print(f"Error converting image: {e}")
     return None
 
-def get_thumbnail_base64(filepath, file_type):
-    """Get thumbnail for video or image"""
-    if file_type == 'image':
-        return get_image_base64(filepath)
-    return None
-
 def validate_file(file):
     """Validate uploaded file"""
     filename = file.name
@@ -132,9 +127,6 @@ if 'viewing_story' not in st.session_state:
     
 if 'current_story_index' not in st.session_state:
     st.session_state.current_story_index = 0
-
-if 'clicked_marker_id' not in st.session_state:
-    st.session_state.clicked_marker_id = None
 
 if 'show_upload_form' not in st.session_state:
     st.session_state.show_upload_form = False
@@ -317,6 +309,40 @@ st.markdown("""
         margin: 20px 0;
         animation: fadeIn 0.5s ease;
     }
+    
+    /* Map popup styling */
+    .map-popup {
+        font-family: Arial, sans-serif;
+        padding: 10px;
+        text-align: center;
+    }
+    
+    .map-popup h4 {
+        margin: 0 0 10px 0;
+        color: #333;
+        font-size: 16px;
+    }
+    
+    .map-popup p {
+        margin: 0 0 10px 0;
+        color: #666;
+        font-size: 12px;
+    }
+    
+    .map-popup button {
+        background: linear-gradient(135deg, #FFFC00, #FF6B6B);
+        color: black;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 20px;
+        cursor: pointer;
+        font-weight: bold;
+        font-size: 14px;
+    }
+    
+    .map-popup button:hover {
+        opacity: 0.9;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -326,7 +352,7 @@ def create_story_marker(item):
     file_type = item.get('type')
     
     if filepath and os.path.exists(filepath) and file_type == 'image':
-        img_base64 = get_thumbnail_base64(filepath, file_type)
+        img_base64 = get_image_base64(filepath)
         if img_base64:
             gradient = "linear-gradient(135deg, #00C853 0%, #69F0AE 100%)" if file_type == 'image' else "linear-gradient(135deg, #FF6D00 0%, #FFAB40 100%)"
             
@@ -441,19 +467,12 @@ def create_map():
     for idx, item in enumerate(st.session_state.media_data):
         icon = create_story_marker(item)
         
-        # Create popup with click handler
+        # Create popup with direct HTML link
         popup_html = f'''
-        <div style="text-align: center; padding: 10px;">
-            <h4 style="margin: 0 0 10px 0; color: #333;">{item['title']}</h4>
-            <p style="margin: 0 0 10px 0; color: #666; font-size: 12px;">{item['description'][:80]}...</p>
-            <button onclick="window.parent.postMessage({{type: 'view_story', story_id: {item['id']}}}, '*')"
-                    style="background: linear-gradient(135deg, #FFFC00, #FF6B6B); 
-                           color: black; 
-                           border: none; 
-                           padding: 8px 16px; 
-                           border-radius: 20px; 
-                           cursor: pointer; 
-                           font-weight: bold;">
+        <div class="map-popup">
+            <h4>{item['title']}</h4>
+            <p>{item['description'][:80]}...</p>
+            <button onclick="window.location.href='?story_id={item['id']}'">
                 👁️ View Story
             </button>
         </div>
@@ -484,6 +503,19 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# Check URL parameters for story_id
+query_params = st.query_params
+if 'story_id' in query_params and st.session_state.viewing_story is None:
+    try:
+        story_id = int(query_params['story_id'])
+        for idx, story in enumerate(st.session_state.media_data):
+            if story['id'] == story_id:
+                st.session_state.viewing_story = story_id
+                st.session_state.current_story_index = idx
+                break
+    except:
+        pass
+
 # Upload Button
 col1, col2, col3 = st.columns([3, 1, 3])
 with col2:
@@ -500,7 +532,7 @@ if st.session_state.upload_success:
     </div>
     """, unsafe_allow_html=True)
     
-    # Clear success message after 5 seconds
+    # Clear success message
     if st.button("OK", key="clear_success"):
         st.session_state.upload_success = None
         st.rerun()
@@ -511,7 +543,7 @@ if st.session_state.show_upload_form:
     
     st.markdown("### 📤 Upload Drone Media")
     
-    # File upload - using a different approach without session state conflicts
+    # File upload
     uploaded_file = st.file_uploader(
         "Choose a file",
         type=ALLOWED_IMAGE_TYPES + ALLOWED_VIDEO_TYPES,
@@ -617,57 +649,6 @@ if st.session_state.show_upload_form:
         <span style="font-size: 12px; color: #666;">Max file size: 200MB per file</span>
     </div>
     """, unsafe_allow_html=True)
-
-# JavaScript to handle marker clicks from popups
-js_code = '''
-<script>
-    // Listen for messages from iframe (popup buttons)
-    window.addEventListener('message', function(event) {
-        if (event.data.type === 'view_story') {
-            // Store the story ID in a hidden element that Streamlit can access
-            const input = document.createElement('input');
-            input.type = 'hidden';
-            input.id = 'selected_story_id';
-            input.value = event.data.story_id;
-            document.body.appendChild(input);
-            
-            // Trigger a Streamlit rerun
-            window.parent.postMessage({
-                type: 'streamlit:setComponentValue',
-                value: event.data.story_id
-            }, '*');
-        }
-    });
-</script>
-'''
-
-# Inject JavaScript
-st.components.v1.html(js_code, height=0)
-
-# Check if a story was selected via JavaScript
-# We'll use a text input to capture the story ID from JavaScript
-story_id_input = st.text_input("Story ID", key="story_id_input", label_visibility="collapsed")
-
-if story_id_input and story_id_input.isdigit():
-    story_id = int(story_id_input)
-    for idx, story in enumerate(st.session_state.media_data):
-        if story['id'] == story_id:
-            st.session_state.viewing_story = story_id
-            st.session_state.current_story_index = idx
-            st.rerun()
-
-# Alternative: Use query parameters for popup clicks
-query_params = st.query_params
-if 'story_id' in query_params and st.session_state.viewing_story is None:
-    try:
-        story_id = int(query_params['story_id'])
-        for idx, story in enumerate(st.session_state.media_data):
-            if story['id'] == story_id:
-                st.session_state.viewing_story = story_id
-                st.session_state.current_story_index = idx
-                break
-    except:
-        pass
 
 # STORY VIEWER
 if st.session_state.viewing_story is not None:
@@ -792,6 +773,8 @@ if st.session_state.viewing_story is not None:
     with col2:
         if st.button("✕ Close Viewer", key="close_story", type="primary", use_container_width=True):
             st.session_state.viewing_story = None
+            # Clear the URL parameter
+            st.query_params.clear()
             st.rerun()
     
     with col3:
@@ -808,13 +791,6 @@ else:
         # Create map
         m = create_map()
         map_output = st_folium(m, width=None, height=600, key="main_map")
-        
-        # Check if a marker was clicked in the map output
-        if map_output and 'last_object_clicked_popup' in map_output:
-            if map_output['last_object_clicked_popup']:
-                # Try to extract story ID from popup
-                # This is a fallback method
-                pass
         
         # Quick view stories
         st.markdown("### 📱 Quick View")
