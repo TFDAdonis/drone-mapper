@@ -14,7 +14,7 @@ st.set_page_config(
     page_title="Drone Media Map",
     page_icon="🛸",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
 # Directories
@@ -128,9 +128,6 @@ if 'upload_success' not in st.session_state:
 if 'map_click' not in st.session_state:
     st.session_state.map_click = None
 
-if 'selected_stories' not in st.session_state:
-    st.session_state.selected_stories = []
-
 # Custom CSS
 st.markdown("""
 <style>
@@ -142,7 +139,6 @@ st.markdown("""
         box-shadow: 0 4px 12px rgba(0,0,0,0.1);
         border: 2px solid transparent;
         transition: all 0.3s ease;
-        cursor: pointer;
     }
     
     .story-card:hover {
@@ -188,6 +184,21 @@ st.markdown("""
         width: 90%;
         max-width: 800px;
         box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    }
+    
+    .marker-preview {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px;
+        background: #f0f8ff;
+        border-radius: 10px;
+        margin: 5px 0;
+        cursor: pointer;
+    }
+    
+    .marker-preview:hover {
+        background: #e6f7ff;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -328,11 +339,70 @@ def create_map():
     folium.LayerControl(position='topright').add_to(m)
     return m
 
+# Sidebar for story selection
+with st.sidebar:
+    st.title("📱 Stories")
+    
+    # Search/filter
+    search_term = st.text_input("Search stories", "")
+    
+    # Filter stories based on search
+    filtered_stories = st.session_state.media_data
+    if search_term:
+        filtered_stories = [
+            story for story in st.session_state.media_data 
+            if search_term.lower() in story['title'].lower() 
+            or search_term.lower() in story['description'].lower()
+        ]
+    
+    # Story type filter
+    type_filter = st.selectbox(
+        "Filter by type",
+        ["All", "Images", "Videos"]
+    )
+    
+    if type_filter == "Images":
+        filtered_stories = [story for story in filtered_stories if story['type'] == 'image']
+    elif type_filter == "Videos":
+        filtered_stories = [story for story in filtered_stories if story['type'] == 'video']
+    
+    st.markdown(f"**Found {len(filtered_stories)} stories**")
+    
+    # Display stories in sidebar
+    for idx, story in enumerate(filtered_stories):
+        col1, col2 = st.columns([1, 4])
+        
+        with col1:
+            icon = "📷" if story['type'] == 'image' else "🎬"
+            st.markdown(f"<div style='font-size: 24px; text-align: center;'>{icon}</div>", unsafe_allow_html=True)
+        
+        with col2:
+            if st.button(story['title'][:20] + ("..." if len(story['title']) > 20 else ""), 
+                        key=f"sidebar_{story['id']}",
+                        help=f"Click to view: {story['title']}",
+                        use_container_width=True):
+                # Find the actual index in the full media_data
+                for full_idx, full_story in enumerate(st.session_state.media_data):
+                    if full_story['id'] == story['id']:
+                        st.session_state.viewing_story = story['id']
+                        st.session_state.current_story_index = full_idx
+                        st.rerun()
+                        break
+        
+        st.markdown(f"""
+        <div style="font-size: 12px; color: #666; padding: 0 10px;">
+            📍 {story['lat']:.3f}, {story['lon']:.3f}<br>
+            ⬆️ {story['altitude']}m • {story['timestamp'][:10]}
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+
 # Main App
 st.title("📡 Drone Media Map")
-st.markdown("Click anywhere on the map to find nearby drone stories!")
+st.markdown("Click anywhere on the map or select a story from the sidebar")
 
-# Create two columns for the layout
+# Create two columns for the main layout
 col1, col2 = st.columns([3, 1])
 
 with col1:
@@ -398,22 +468,29 @@ if st.session_state.map_click:
         # Sort by distance
         nearby_stories.sort(key=lambda x: x[2])
         
-        cols = st.columns(2)
-        for i, (idx, story, distance) in enumerate(nearby_stories):
-            with cols[i % 2]:
+        for idx, story, distance in nearby_stories:
+            col_n1, col_n2, col_n3 = st.columns([3, 1, 1])
+            
+            with col_n1:
                 st.markdown(f"""
-                <div class="story-card">
-                    <div style="font-weight: bold; font-size: 16px;">{story['title']}</div>
-                    <div style="font-size: 12px; color: #666; margin: 5px 0;">
+                <div style="padding: 10px; background: #f8f9fa; border-radius: 10px; margin: 5px 0;">
+                    <div style="font-weight: bold;">{story['title']}</div>
+                    <div style="font-size: 12px; color: #666;">
                         📍 {distance*111:.1f}km away • {story['type'].upper()} • {story['altitude']}m
                     </div>
-                    <div style="font-size: 14px; margin: 10px 0;">{story['description'][:100]}...</div>
                 </div>
                 """, unsafe_allow_html=True)
-                
-                if st.button(f"👁️ View This Story", key=f"view_nearby_{story['id']}", use_container_width=True):
+            
+            with col_n2:
+                if st.button("👁️ View", key=f"view_nearby_{story['id']}"):
                     st.session_state.viewing_story = story['id']
                     st.session_state.current_story_index = idx
+                    st.rerun()
+            
+            with col_n3:
+                if st.button("📍 Show", key=f"show_nearby_{story['id']}"):
+                    # Center map on this story
+                    st.session_state.map_click = {'lat': story['lat'], 'lng': story['lon']}
                     st.rerun()
     else:
         st.info("No stories found near your click. Try clicking closer to a marker!")
@@ -427,114 +504,73 @@ if st.button("➕ Upload New Media", key="toggle_upload", use_container_width=Tr
     st.rerun()
 
 if st.session_state.show_upload_form:
-    with st.form("upload_form"):
-        st.markdown("### Upload Details")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            uploaded_file = st.file_uploader(
-                "Choose drone media file",
-                type=ALLOWED_IMAGE_TYPES + ALLOWED_VIDEO_TYPES,
-                help="Upload photos or videos from your drone"
-            )
-            
-            title = st.text_input("Title *", placeholder="Enter a descriptive title")
-            
-            st.markdown("**Location**")
-            lat = st.number_input("Latitude *", value=34.0522, format="%.6f", step=0.0001)
-            lon = st.number_input("Longitude *", value=-118.2437, format="%.6f", step=0.0001)
-        
-        with col2:
-            description = st.text_area("Description *", placeholder="Describe your drone footage...", height=100)
-            
-            timestamp = st.date_input("Date", value=datetime.now())
-            
-            altitude = st.number_input("Altitude (meters) *", min_value=0.0, value=100.0, step=10.0)
-        
-        # Submit button
-        if st.form_submit_button("🚀 Upload to Map", use_container_width=True):
-            if uploaded_file and title and description:
-                is_valid, result = validate_file(uploaded_file)
-                
-                if not is_valid:
-                    st.error(result)
-                else:
-                    file_type = result
-                    filepath = save_uploaded_file(uploaded_file)
-                    
-                    # Generate new ID
-                    if st.session_state.media_data:
-                        new_id = max(item['id'] for item in st.session_state.media_data) + 1
-                    else:
-                        new_id = 1
-                    
-                    # Create new media entry
-                    new_media = {
-                        'id': new_id,
-                        'type': file_type,
-                        'title': title,
-                        'lat': float(lat),
-                        'lon': float(lon),
-                        'timestamp': timestamp.strftime('%Y-%m-%d %H:%M:%S'),
-                        'altitude': float(altitude),
-                        'description': description,
-                        'filepath': filepath
-                    }
-                    
-                    # Add to media data
-                    st.session_state.media_data.append(new_media)
-                    save_media_data(st.session_state.media_data)
-                    
-                    st.success(f"✅ {file_type.title()} uploaded successfully!")
-                    st.session_state.show_upload_form = False
-                    st.session_state.upload_success = True
-                    st.rerun()
-            else:
-                st.error("Please fill all required fields (*)")
-
-# All Stories Grid View
-st.markdown("---")
-st.markdown("## 📱 All Stories")
-
-if st.session_state.media_data:
-    cols = st.columns(3)
+    st.markdown('<div class="upload-form">', unsafe_allow_html=True)
+    st.markdown("### Upload Details")
     
-    for idx, story in enumerate(st.session_state.media_data):
-        with cols[idx % 3]:
-            # Story preview card
-            st.markdown(f"""
-            <div class="story-card" onclick="this.nextElementSibling.click()">
-                <div style="font-weight: bold; font-size: 16px; color: #333;">{story['title']}</div>
-                <div style="font-size: 12px; color: #666; margin: 5px 0;">
-                    📅 {story['timestamp'][:10]} • 📍 {story['lat']:.2f}, {story['lon']:.2f}
-                </div>
-                <div style="font-size: 14px; color: #555; margin: 10px 0;">{story['description'][:80]}...</div>
-                <div style="display: flex; gap: 5px; margin-top: 10px;">
-                    <span style="
-                        padding: 3px 10px;
-                        border-radius: 10px;
-                        font-size: 11px;
-                        font-weight: 600;
-                        background: {'#00C853' if story['type'] == 'image' else '#FF6D00'};
-                        color: white;
-                    ">{story['type'].upper()}</span>
-                    <span style="
-                        padding: 3px 10px;
-                        border-radius: 10px;
-                        font-size: 11px;
-                        background: #2962FF;
-                        color: white;
-                    ">⬆️ {story['altitude']}m</span>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+    uploaded_file = st.file_uploader(
+        "Choose drone media file",
+        type=ALLOWED_IMAGE_TYPES + ALLOWED_VIDEO_TYPES,
+        help="Upload photos or videos from your drone"
+    )
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        title = st.text_input("Title *", placeholder="Enter a descriptive title")
+        
+        st.markdown("**Location**")
+        lat = st.number_input("Latitude *", value=34.0522, format="%.6f", step=0.0001)
+        lon = st.number_input("Longitude *", value=-118.2437, format="%.6f", step=0.0001)
+    
+    with col2:
+        description = st.text_area("Description *", placeholder="Describe your drone footage...", height=100)
+        
+        timestamp = st.date_input("Date", value=datetime.now())
+        
+        altitude = st.number_input("Altitude (meters) *", min_value=0.0, value=100.0, step=10.0)
+    
+    # Submit button
+    if st.button("🚀 Upload to Map", key="submit_upload", use_container_width=True, type="primary"):
+        if uploaded_file and title and description:
+            is_valid, result = validate_file(uploaded_file)
             
-            # Hidden button that gets clicked
-            if st.button(f"View {story['title']}", key=f"view_{story['id']}", label_visibility="collapsed"):
-                st.session_state.viewing_story = story['id']
-                st.session_state.current_story_index = idx
+            if not is_valid:
+                st.error(result)
+            else:
+                file_type = result
+                filepath = save_uploaded_file(uploaded_file)
+                
+                # Generate new ID
+                if st.session_state.media_data:
+                    new_id = max(item['id'] for item in st.session_state.media_data) + 1
+                else:
+                    new_id = 1
+                
+                # Create new media entry
+                new_media = {
+                    'id': new_id,
+                    'type': file_type,
+                    'title': title,
+                    'lat': float(lat),
+                    'lon': float(lon),
+                    'timestamp': timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+                    'altitude': float(altitude),
+                    'description': description,
+                    'filepath': filepath
+                }
+                
+                # Add to media data
+                st.session_state.media_data.append(new_media)
+                save_media_data(st.session_state.media_data)
+                
+                st.success(f"✅ {file_type.title()} uploaded successfully!")
+                st.session_state.show_upload_form = False
+                st.session_state.upload_success = True
                 st.rerun()
+        else:
+            st.error("Please fill all required fields (*)")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # STORY VIEWER MODAL
 if st.session_state.viewing_story is not None:
